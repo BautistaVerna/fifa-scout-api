@@ -1,10 +1,10 @@
-FIFA Scout — reemplazá {{API_URL}} en todo el prompt por la URL real de tu API (ej: https://fifa-scout-api.onrender.com) antes de pegarlo en Lovable.
+FIFA Scout — prompt listo para pegar en Lovable. La URL de la API ya está fijada a https://fifa-scout-api.onrender.com.
 
 ---
 
 Quiero construir "FIFA Scout", una app web de scouting de jugadores de fútbol con Machine Learning. Es un producto de datos, no un juego: la audiencia son scouts/analistas que exploran un dataset de ~17.700 jugadores y usan un modelo entrenado (ya existente, servido por una API externa) para predecir el potencial de crecimiento de un jugador.
 
-No hay backend propio que programar: toda la data y las predicciones vienen de una API REST ya desplegada en {{API_URL}}. La app es un frontend puro (React + Vite + TypeScript + Tailwind + shadcn/ui) que consume esa API con fetch.
+No hay backend propio que programar: toda la data y las predicciones vienen de una API REST ya desplegada en https://fifa-scout-api.onrender.com. La app es un frontend puro (React + Vite + TypeScript + Tailwind + shadcn/ui) que consume esa API con fetch.
 
 ## Sistema de diseño — "dark sports-tech"
 
@@ -39,18 +39,18 @@ Cada página empieza con un "hero header": tarjeta con ícono de lucide (26px, c
 
 Ícono: `search`.
 
-- Sidebar de filtros (o panel colapsable arriba en mobile): multiselect de posición, slider de rango de edad (15-45), slider de rango de valor de mercado en millones €, multiselect de nacionalidad, slider de overall mínimo (50-99). Las opciones de posición/nacionalidad salen de `GET {{API_URL}}/filters/options`.
-- Al cambiar cualquier filtro, llamar `GET {{API_URL}}/players` con los filtros como query params (`posiciones`, `edad_min`, `edad_max`, `valor_min`, `valor_max`, `nacionalidades`, `overall_min`, `limit=500`).
+- Sidebar de filtros (o panel colapsable arriba en mobile): multiselect de posición, slider de rango de edad (15-45), slider de rango de valor de mercado en millones €, multiselect de nacionalidad, slider de overall mínimo (50-99). Las opciones de posición/nacionalidad salen de `GET https://fifa-scout-api.onrender.com/filters/options`.
+- Al cambiar cualquier filtro, llamar `GET https://fifa-scout-api.onrender.com/players` con los filtros como query params (`posiciones`, `edad_min`, `edad_max`, `valor_min`, `valor_max`, `nacionalidades`, `overall_min`, `limit=500`).
 - 3 tarjetas KPI arriba: "Jugadores filtrados", "Total en el dataset", "Potencial promedio" — vienen en `respuesta.kpis`.
 - Scatter chart (usar `recharts`, `ScatterChart`): eje X = valor de mercado en millones, eje Y = potencial predicho, color por edad (escala de `#22C55E` → `#D4AF37` → `#F59E0B`), tamaño de punto por overall. Datos en `respuesta.scatter`. Fondo del chart `#16213B`, grilla `#22304A`, texto `#94A3B8`.
-- Debajo, sección "Joyas Ocultas" (ícono `gem`): llamar `GET {{API_URL}}/players/hidden-gems` con los mismos filtros. Si `criterios_relajados` no es null, mostrar un aviso explicando que se relajaron los criterios. Tabla con nombre, nacionalidad, club, edad, overall, potencial predicho (con barra de progreso), valor formateado en € (M/K).
+- Debajo, sección "Joyas Ocultas" (ícono `gem`): llamar `GET https://fifa-scout-api.onrender.com/players/hidden-gems` con los mismos filtros. Si `criterios_relajados` no es null, mostrar un aviso explicando que se relajaron los criterios. Tabla con nombre, nacionalidad, club, edad, overall, potencial predicho (con barra de progreso), valor formateado en € (M/K).
 
 ### Página 2 — Predictor Individual (`/predictor`)
 
 Ícono: `zap`.
 
-- Formulario en 3 columnas (tarjetas con borde), sliders con rango real traído de `GET {{API_URL}}/features/ranges`: edad, overall rating, visión, agilidad, entrada de pie, fuerza | reputación internacional (1-5), pie malo (1-5), gambeta (1-5), índice de ataque, índice de defensa | índice de juego asociado, índice físico, selects de cláusula de rescisión (sí/no), pie preferido, nacionalidad (de `/filters/options`), posición específica (de `/filters/options`).
-- Botón primario "Predecir potencial" → `POST {{API_URL}}/predict` con el payload (ver forma exacta abajo). Mostrar loading state mientras espera (el primer request puede tardar hasta 50s si el servidor estaba dormido — mostrar mensaje "Conectando con el servidor, puede tardar unos segundos…").
+- Formulario en 3 columnas (tarjetas con borde), sliders con rango real traído de `GET https://fifa-scout-api.onrender.com/features/ranges`: edad, overall rating, visión, agilidad, entrada de pie, fuerza | reputación internacional (1-5), pie malo (1-5), gambeta (1-5), índice de ataque, índice de defensa | índice de juego asociado, índice físico, selects de cláusula de rescisión (sí/no), pie preferido, nacionalidad (de `/filters/options`), posición específica (de `/filters/options`).
+- Botón primario "Predecir potencial" → `POST https://fifa-scout-api.onrender.com/predict` con el payload (ver forma exacta abajo). Mostrar loading state mientras espera (el primer request puede tardar hasta 50s si el servidor estaba dormido — mostrar mensaje "Conectando con el servidor, puede tardar unos segundos…").
 - Resultado: número grande (Sora, 4rem) con el potencial predicho, badge con la clasificación (`clasificacion`), gauge/velocímetro (rango 50-99, colores por tramo: gris `#2C3B57` hasta 65, azul `#5B8DEF` hasta 82, verde `#16A34A` hasta 88, dorado `#D4AF37` hasta 99).
 - Si `top_features` no es null, mostrar un bar chart horizontal con las variables de mayor impacto (`feature` + `impacto`), barras verdes para impacto positivo y ámbar para negativo.
 
@@ -72,24 +72,24 @@ Respuesta: `{ "potencial_predicho": 79.1, "clasificacion": "Titular sólido", "t
 
 Ícono: `folder-open`.
 
-- Botón "Descargar plantilla CSV" → enlaza directo a `GET {{API_URL}}/template.csv`.
+- Botón "Descargar plantilla CSV" → enlaza directo a `GET https://fifa-scout-api.onrender.com/template.csv`.
 - Dropzone de carga de un CSV (drag & drop + botón "Elegir archivo"), texto en español, límite razonable (~10MB, avisar si supera).
-- Al subir, `POST {{API_URL}}/predict-batch` como `multipart/form-data` con el campo `archivo`.
+- Al subir, `POST https://fifa-scout-api.onrender.com/predict-batch` como `multipart/form-data` con el campo `archivo`.
 - Mostrar loading, luego: si hay error (400), mostrar el mensaje tal cual viene del backend (dice qué columnas faltan). Si OK: 4 KPIs (jugadores procesados, potencial promedio/máximo/mínimo), aviso si hubo `filas_invalidas_excluidas`, tabla con todos los `resultados` (paginada si son muchas filas), botón para descargar esos resultados como CSV (generarlo client-side con los datos ya recibidos).
 
 ### Página 4 — Clasificador de Posición (`/clasificador`)
 
 Ícono: `crosshair` o `target`.
 
-- Llamar `GET {{API_URL}}/classifier/status`. Como hoy `disponible` es `false`, mostrar un estado vacío claro: ícono, "Esta funcionalidad está en desarrollo y se habilitará próximamente", sin exponer nombres de archivos ni jerga técnica.
-- Debajo, gráfico de barras horizontal con la distribución de posiciones del dataset (`GET {{API_URL}}/model-info` → `distribucion_posiciones`), color azul neutro `#5B8DEF`.
+- Llamar `GET https://fifa-scout-api.onrender.com/classifier/status`. Como hoy `disponible` es `false`, mostrar un estado vacío claro: ícono, "Esta funcionalidad está en desarrollo y se habilitará próximamente", sin exponer nombres de archivos ni jerga técnica.
+- Debajo, gráfico de barras horizontal con la distribución de posiciones del dataset (`GET https://fifa-scout-api.onrender.com/model-info` → `distribucion_posiciones`), color azul neutro `#5B8DEF`.
 - Dejar el componente preparado (con un comentario) para cuando `disponible` sea `true`: en ese caso debería mostrar un formulario similar al Predictor Individual.
 
 ### Página 5 — Sobre el Modelo (`/modelo`)
 
 Ícono: `bar-chart-3`.
 
-Todo sale de `GET {{API_URL}}/model-info`:
+Todo sale de `GET https://fifa-scout-api.onrender.com/model-info`:
 - Tabla "Comparación de modelos evaluados" (`comparativa_modelos`): columnas Modelo, R² Test (con barra de progreso 0.8-1.0), MAE, RMSE, Gap train-test (%).
 - Bar chart horizontal de R² por modelo, color continuo de gris `#94A3B8` a verde claro `#22C55E`.
 - Texto explicando por qué se eligió Gradient Boosting Optimizado, usando `hiperparametros_gb` (learning_rate, max_depth, n_estimators, subsample) y las métricas del modelo ganador.
