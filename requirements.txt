@@ -1,0 +1,14 @@
+# Mismo stack de ML que la app original (no se toca el análisis)
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.2
+joblib==1.4.2
+pandas==2.2.2
+shap==0.46.0
+numba==0.60.0
+llvmlite==0.43.0
+
+# API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
