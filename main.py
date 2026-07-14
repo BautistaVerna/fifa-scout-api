@@ -236,6 +236,62 @@ def joyas_ocultas(
     }
 
 
+@app.get("/players/position-stats")
+def estadisticas_por_posicion(posiciones: List[str] = Query(...)):
+    """
+    Promedios, histogramas y top jugadores para una o más posiciones,
+    calculados sobre TODO el subconjunto filtrado (no sobre una muestra
+    truncada por `limit`, como hace /players).
+    """
+    invalidas = [p for p in posiciones if p not in POSICIONES]
+    if invalidas:
+        raise HTTPException(400, f"Posición inválida: {invalidas}. Opciones: {POSICIONES}")
+
+    filtrado = df[df[POSITION_COL].isin(posiciones)] if POSITION_COL else df.iloc[0:0]
+
+    if filtrado.empty:
+        return {
+            "cantidad": 0,
+            "overall_promedio": None,
+            "potencial_promedio": None,
+            "edad_promedio": None,
+            "valor_promedio": None,
+            "nacionalidad_top": None,
+            "club_top": None,
+            "overall_histograma": None,
+            "potencial_histograma": None,
+            "edad_histograma": None,
+            "top_potencial": [],
+        }
+
+    def moda(serie: pd.Series):
+        m = serie.dropna().mode()
+        return m.iloc[0] if not m.empty else None
+
+    def histograma(serie: pd.Series, bins: int, rango: tuple):
+        conteos, bordes = np.histogram(serie.dropna(), bins=bins, range=rango)
+        return {"conteos": conteos.tolist(), "bordes": [round(float(b), 1) for b in bordes]}
+
+    top = filtrado.sort_values("potential_predicho", ascending=False).head(3)
+
+    return {
+        "cantidad": len(filtrado),
+        "overall_promedio": round(float(filtrado["overall_rating"].mean()), 1),
+        "potencial_promedio": round(float(filtrado["potential_predicho"].mean()), 1),
+        "edad_promedio": round(float(filtrado["age"].mean()), 1),
+        "valor_promedio": round(float(filtrado["value_euro"].mean()), 2),
+        "nacionalidad_top": moda(filtrado["nationality"]),
+        "club_top": moda(filtrado[CLUB_COL]) if CLUB_COL else None,
+        "overall_histograma": histograma(filtrado["overall_rating"], 12, (40, 100)),
+        "potencial_histograma": histograma(filtrado["potential_predicho"], 12, (40, 100)),
+        "edad_histograma": histograma(filtrado["age"], 10, (15, 45)),
+        "top_potencial": [
+            {"nombre": r[SHORT_COL], "potencial_predicho": float(r["potential_predicho"])}
+            for _, r in top.iterrows()
+        ],
+    }
+
+
 class PrediccionInput(BaseModel):
     age: int
     overall_rating: int
