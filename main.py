@@ -135,9 +135,9 @@ def calcular_joyas(data: pd.DataFrame, edad_tope: int, percentil: float, potenci
 
 def jugador_a_dict(row) -> dict:
     return {
+        "id": int(row.name),
         "nombre": row[SHORT_COL],
         "nacionalidad": row["nationality"],
-        "club": row[CLUB_COL] if CLUB_COL else None,
         "edad": int(row["age"]),
         "overall": int(row["overall_rating"]),
         "potencial_predicho": float(row["potential_predicho"]),
@@ -195,6 +195,7 @@ def listar_jugadores(
         "jugadores": [jugador_a_dict(r) for _, r in muestra.iterrows()],
         "scatter": [
             {
+                "id": int(r.name),
                 "valor_millones": round(float(r["value_euro"]) / 1_000_000, 2),
                 "potencial_predicho": float(r["potential_predicho"]),
                 "edad": int(r["age"]),
@@ -215,6 +216,7 @@ def joyas_ocultas(
     valor_max: float = 999.0,
     nacionalidades: Optional[List[str]] = Query(None),
     overall_min: int = 50,
+    limit: int = Query(20, ge=1, le=100),
 ):
     filtrado = aplicar_filtros(posiciones, edad_min, edad_max, valor_min, valor_max, nacionalidades, overall_min)
     criterios_relajados = None
@@ -226,13 +228,20 @@ def joyas_ocultas(
         joyas = calcular_joyas(filtrado, 25, 0.40, 75)
         criterios_relajados = "percentil de valor 40% y potencial ≥ 75"
     if joyas.empty and not filtrado.empty:
-        joyas = filtrado.sort_values("potential_predicho", ascending=False).head(20)
-        criterios_relajados = "sin restricción de edad/valor — top 20 por potencial predicho"
+        joyas = filtrado.sort_values("potential_predicho", ascending=False).head(limit)
+        criterios_relajados = f"sin restricción de edad/valor — top {limit} por potencial predicho"
 
-    joyas = joyas.sort_values("potential_predicho", ascending=False).head(20)
+    joyas = joyas.sort_values("potential_predicho", ascending=False).head(limit)
+
+    # Segunda lista: mayor potencial absoluto en el filtro actual, sin las
+    # restricciones de edad/valor de "joyas ocultas" (crecimiento). Muestra
+    # a quiénes llegan más alto en vez de a quiénes más suben.
+    mayor_potencial = filtrado.sort_values("potential_predicho", ascending=False).head(limit)
+
     return {
         "criterios_relajados": criterios_relajados,
         "jugadores": [jugador_a_dict(r) for _, r in joyas.iterrows()],
+        "mayor_potencial": [jugador_a_dict(r) for _, r in mayor_potencial.iterrows()],
     }
 
 
@@ -257,7 +266,6 @@ def estadisticas_por_posicion(posiciones: List[str] = Query(...)):
             "edad_promedio": None,
             "valor_promedio": None,
             "nacionalidad_top": None,
-            "club_top": None,
             "overall_histograma": None,
             "potencial_histograma": None,
             "edad_histograma": None,
@@ -281,14 +289,91 @@ def estadisticas_por_posicion(posiciones: List[str] = Query(...)):
         "edad_promedio": round(float(filtrado["age"].mean()), 1),
         "valor_promedio": round(float(filtrado["value_euro"].mean()), 2),
         "nacionalidad_top": moda(filtrado["nationality"]),
-        "club_top": moda(filtrado[CLUB_COL]) if CLUB_COL else None,
         "overall_histograma": histograma(filtrado["overall_rating"], 12, (40, 100)),
         "potencial_histograma": histograma(filtrado["potential_predicho"], 12, (40, 100)),
         "edad_histograma": histograma(filtrado["age"], 10, (15, 45)),
         "top_potencial": [
-            {"nombre": r[SHORT_COL], "potencial_predicho": float(r["potential_predicho"])}
+            {
+                "id": int(r.name),
+                "nombre": r[SHORT_COL],
+                "potencial_predicho": float(r["potential_predicho"]),
+            }
             for _, r in top.iterrows()
         ],
+    }
+
+
+def _num(row, col):
+    if col not in df.columns:
+        return None
+    v = row[col]
+    return float(v) if pd.notna(v) else None
+
+
+@app.get("/players/{player_id}")
+def detalle_jugador(player_id: int):
+    if player_id < 0 or player_id >= len(df):
+        raise HTTPException(404, "Jugador no encontrado.")
+    row = df.iloc[player_id]
+
+    return {
+        "id": player_id,
+        "identidad": {
+            "nombre": row[SHORT_COL],
+            "nombre_completo": row[LONG_COL],
+            "nacionalidad": row["nationality"],
+            "edad": int(row["age"]),
+            "altura_cm": _num(row, "height_cm"),
+            "peso_kg": _num(row, "weight_kgs"),
+            "pie_preferido": row.get("preferred_foot"),
+            "tipo_cuerpo": row.get("body_type_clean", row.get("body_type")),
+            "posicion_general": row.get("general_position"),
+            "posicion_especifica": row[POSITION_COL] if POSITION_COL else None,
+        },
+        "valoracion": {
+            "overall": int(row["overall_rating"]),
+            "potencial_real": _num(row, "potential"),
+            "potencial_predicho": float(row["potential_predicho"]),
+            "clasificacion": clasificar_potencial(float(row["potential_predicho"])),
+        },
+        "mercado": {
+            "valor_euros": _num(row, "value_euro"),
+            "salario_euros": _num(row, "wage_euro"),
+            "clausula_rescision_euros": _num(row, "release_clause_euro"),
+            "tiene_clausula": bool(row["has_release_clause"]) if "has_release_clause" in df.columns else None,
+        },
+        "reputacion_habilidad": {
+            "reputacion_internacional": int(row["international_reputation(1-5)"]),
+            "pie_malo": int(row["weak_foot(1-5)"]),
+            "gambeta": int(row["skill_moves(1-5)"]),
+        },
+        "atributos_tecnicos": {
+            k: _num(row, k)
+            for k in [
+                "crossing", "finishing", "heading_accuracy", "short_passing", "volleys",
+                "dribbling", "curve", "freekick_accuracy", "long_passing", "ball_control",
+            ]
+        },
+        "atributos_fisicos": {
+            k: _num(row, k)
+            for k in [
+                "acceleration", "sprint_speed", "agility", "reactions", "balance",
+                "shot_power", "jumping", "stamina", "strength", "long_shots",
+            ]
+        },
+        "atributos_mentales": {
+            k: _num(row, k)
+            for k in [
+                "aggression", "interceptions", "positioning", "vision", "penalties",
+                "composure", "marking", "standing_tackle", "sliding_tackle",
+            ]
+        },
+        "scores_compuestos": {
+            "ataque": _num(row, "attack_score"),
+            "defensa": _num(row, "defense_score"),
+            "juego_asociado": _num(row, "playmaking_score"),
+            "fisico": _num(row, "physical_score"),
+        },
     }
 
 
