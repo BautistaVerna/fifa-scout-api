@@ -8,6 +8,9 @@ shap==0.46.0
 numba==0.60.0
 llvmlite==0.43.0
 
+# Clasificador de posición (SVC exportado a ONNX)
+onnxruntime==1.19.2
+
 # API
 fastapi==0.115.0
 uvicorn[standard]==0.30.6

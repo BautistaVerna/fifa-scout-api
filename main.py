@@ -14,6 +14,7 @@ from typing import List, Optional
 
 import joblib
 import numpy as np
+import onnxruntime as ort
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,7 @@ from pydantic import BaseModel, Field
 # ============================================================
 MODEL_PATH = "modelo_gb_pipeline.joblib"
 DATA_PATH = "fifa_players_model_ready.csv"
+CLASIFICADOR_PATH = "svc_fifa_scout_lovable.onnx"
 
 FEATURES_BASE = [
     "age", "overall_rating",
@@ -57,6 +59,55 @@ COMPARATIVA_MODELOS = [
 ]
 HIPERPARAMETROS_GB = {"learning_rate": 0.05, "max_depth": 5, "n_estimators": 300, "subsample": 0.8}
 
+# ============================================================
+# CLASIFICADOR DE POSICIÓN — SVC (RBF), exportado a ONNX (skl2onnx)
+# ============================================================
+# Orden EXACTO de las 56 features con las que se entrenó/exportó el modelo.
+# El escalado (StandardScaler) ya está embebido en el grafo ONNX.
+CLASIFICADOR_FEATURES = [
+    "age", "height_cm", "weight_kgs", "overall_rating", "potential", "value_euro", "wage_euro",
+    "international_reputation(1-5)", "weak_foot(1-5)", "skill_moves(1-5)", "release_clause_euro",
+    "crossing", "finishing", "heading_accuracy", "short_passing", "volleys", "dribbling", "curve",
+    "freekick_accuracy", "long_passing", "ball_control", "acceleration", "sprint_speed", "agility",
+    "reactions", "balance", "shot_power", "jumping", "stamina", "strength", "long_shots",
+    "aggression", "interceptions", "positioning", "vision", "penalties", "composure", "marking",
+    "standing_tackle", "sliding_tackle", "has_release_clause", "potential_gap", "attack_score",
+    "defense_score", "playmaking_score", "physical_score", "value_euro_outlier", "wage_euro_outlier",
+    "age_outlier", "overall_rating_outlier", "preferred_foot_enc", "nationality_freq",
+    "body_Atipico", "body_Lean", "body_Normal", "body_Stocky",
+]
+CLASIFICADOR_SKILLS = [
+    "crossing", "finishing", "heading_accuracy", "short_passing", "volleys", "dribbling", "curve",
+    "freekick_accuracy", "long_passing", "ball_control", "acceleration", "sprint_speed", "agility",
+    "reactions", "balance", "shot_power", "jumping", "stamina", "strength", "long_shots",
+    "aggression", "interceptions", "positioning", "vision", "penalties", "composure", "marking",
+    "standing_tackle", "sliding_tackle",
+]
+CLASIFICADOR_RANGE_FEATURES = [
+    "height_cm", "weight_kgs", "potential", "value_euro", "wage_euro", "release_clause_euro",
+] + CLASIFICADOR_SKILLS
+TIPOS_CUERPO = ["Atipico", "Lean", "Normal", "Stocky"]
+
+COMPARATIVA_CLASIFICADOR = [
+    {"modelo": "Naive Bayes (Gaussian)", "acc_test": 0.6912, "f1_macro_test": 0.6883, "f1_weighted_test": 0.6939, "auc_macro_ovr": 0.9455},
+    {"modelo": "KNN", "acc_test": 0.7458, "f1_macro_test": 0.7353, "f1_weighted_test": 0.7504, "auc_macro_ovr": 0.9554},
+    {"modelo": "Árbol de Decisión", "acc_test": 0.7605, "f1_macro_test": 0.7470, "f1_weighted_test": 0.7653, "auc_macro_ovr": 0.9332},
+    {"modelo": "Regresión Logística", "acc_test": 0.8565, "f1_macro_test": 0.8388, "f1_weighted_test": 0.8590, "auc_macro_ovr": 0.9822},
+    {"modelo": "SVC (RBF) — elegido", "acc_test": 0.8715, "f1_macro_test": 0.8540, "f1_weighted_test": 0.8719, "auc_macro_ovr": 0.9828},
+]
+HIPERPARAMETROS_SVC = {"kernel": "RBF", "gamma": 0.01}
+# Matriz de confusión normalizada (recall por clase) del SVC en test, mismo
+# orden que POSICIONES tanto en filas (real) como columnas (predicho).
+MATRIZ_CONFUSION_SVC = [
+    [1.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00],
+    [0.00, 0.91, 0.00, 0.00, 0.05, 0.04, 0.00],
+    [0.00, 0.00, 0.89, 0.08, 0.00, 0.00, 0.03],
+    [0.00, 0.00, 0.08, 0.71, 0.04, 0.03, 0.13],
+    [0.00, 0.02, 0.00, 0.01, 0.93, 0.04, 0.00],
+    [0.00, 0.01, 0.00, 0.01, 0.04, 0.90, 0.03],
+    [0.00, 0.00, 0.04, 0.19, 0.00, 0.09, 0.68],
+]
+
 
 def clasificar_potencial(p: float) -> str:
     if p < 65:
@@ -83,11 +134,16 @@ def resolve_display_columns(df: pd.DataFrame):
 # ============================================================
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"No se encontró '{MODEL_PATH}'. Copiá el .joblib junto a main.py.")
+if not os.path.exists(CLASIFICADOR_PATH):
+    raise RuntimeError(f"No se encontró '{CLASIFICADOR_PATH}'. Copiá el .onnx junto a main.py.")
 
 modelo = joblib.load(MODEL_PATH)
 df = pd.read_csv(DATA_PATH)
 df["potential_predicho"] = np.round(modelo.predict(df[ALL_FEATURES]), 2)
 SHORT_COL, LONG_COL, CLUB_COL, POSITION_COL = resolve_display_columns(df)
+
+clasificador_sess = ort.InferenceSession(CLASIFICADOR_PATH, providers=["CPUExecutionProvider"])
+CLASIFICADOR_INPUT_NAME = clasificador_sess.get_inputs()[0].name
 
 app = FastAPI(title="FIFA Scout API", version="1.0.0")
 
@@ -517,10 +573,131 @@ def info_modelo():
             "edad_max": int(df["age"].max()),
             "nacionalidades_distintas": int(df["nationality"].nunique()),
         },
+        "comparativa_clasificador": COMPARATIVA_CLASIFICADOR,
+        "hiperparametros_svc": HIPERPARAMETROS_SVC,
+        "matriz_confusion_svc": {
+            "clases": POSICIONES,
+            "valores": MATRIZ_CONFUSION_SVC,
+        },
         "distribucion_posiciones": posiciones_conteo,
     }
 
 
 @app.get("/classifier/status")
 def estado_clasificador_posicion():
-    return {"disponible": False, "mensaje": "Esta funcionalidad está en desarrollo y se habilitará próximamente."}
+    return {"disponible": True, "mensaje": "Clasificador de posición disponible."}
+
+
+@app.get("/classifier/ranges")
+def rangos_clasificador():
+    """Min/max reales del dataset para los sliders del Clasificador de Posición."""
+    out = {}
+    for feat in CLASIFICADOR_RANGE_FEATURES:
+        out[feat] = {"min": float(df[feat].min()), "max": float(df[feat].max())}
+    return out
+
+
+class ClasificadorInput(BaseModel):
+    age: int
+    height_cm: float
+    weight_kgs: float
+    overall_rating: int
+    potential: int
+    value_euro: float
+    wage_euro: float
+    international_reputation: int = Field(..., ge=1, le=5)
+    weak_foot: int = Field(..., ge=1, le=5)
+    skill_moves: int = Field(..., ge=1, le=5)
+    has_release_clause: bool
+    release_clause_euro: float = 0.0
+    crossing: float
+    finishing: float
+    heading_accuracy: float
+    short_passing: float
+    volleys: float
+    dribbling: float
+    curve: float
+    freekick_accuracy: float
+    long_passing: float
+    ball_control: float
+    acceleration: float
+    sprint_speed: float
+    agility: float
+    reactions: float
+    balance: float
+    shot_power: float
+    jumping: float
+    stamina: float
+    strength: float
+    long_shots: float
+    aggression: float
+    interceptions: float
+    positioning: float
+    vision: float
+    penalties: float
+    composure: float
+    marking: float
+    standing_tackle: float
+    sliding_tackle: float
+    attack_score: float
+    defense_score: float
+    playmaking_score: float
+    physical_score: float
+    preferred_foot: str  # "Derecho" | "Izquierdo"
+    nacionalidad: str
+    tipo_cuerpo: str  # uno de TIPOS_CUERPO
+
+
+@app.post("/classifier/predict")
+def clasificar_posicion(payload: ClasificadorInput):
+    if payload.tipo_cuerpo not in TIPOS_CUERPO:
+        raise HTTPException(400, f"Tipo de cuerpo inválido. Opciones: {TIPOS_CUERPO}")
+
+    nationality_freq = int(df["nationality"].value_counts().get(payload.nacionalidad, 1))
+    fila = {
+        "age": payload.age,
+        "height_cm": payload.height_cm,
+        "weight_kgs": payload.weight_kgs,
+        "overall_rating": payload.overall_rating,
+        "potential": payload.potential,
+        "value_euro": payload.value_euro,
+        "wage_euro": payload.wage_euro,
+        "international_reputation(1-5)": payload.international_reputation,
+        "weak_foot(1-5)": payload.weak_foot,
+        "skill_moves(1-5)": payload.skill_moves,
+        "release_clause_euro": payload.release_clause_euro if payload.has_release_clause else 0.0,
+        "has_release_clause": int(payload.has_release_clause),
+        "potential_gap": payload.potential - payload.overall_rating,
+        "attack_score": payload.attack_score,
+        "defense_score": payload.defense_score,
+        "playmaking_score": payload.playmaking_score,
+        "physical_score": payload.physical_score,
+        # No se recalculan los flags de outlier del dataset de entrenamiento;
+        # se asumen 0 (no-outlier) para jugadores hipotéticos cargados a mano.
+        "value_euro_outlier": 0,
+        "wage_euro_outlier": 0,
+        "age_outlier": 0,
+        "overall_rating_outlier": 0,
+        "preferred_foot_enc": 1 if payload.preferred_foot == "Derecho" else 0,
+        "nationality_freq": nationality_freq,
+        "body_Atipico": 1 if payload.tipo_cuerpo == "Atipico" else 0,
+        "body_Lean": 1 if payload.tipo_cuerpo == "Lean" else 0,
+        "body_Normal": 1 if payload.tipo_cuerpo == "Normal" else 0,
+        "body_Stocky": 1 if payload.tipo_cuerpo == "Stocky" else 0,
+    }
+    for skill in CLASIFICADOR_SKILLS:
+        fila[skill] = getattr(payload, skill)
+
+    x = np.array([[fila[c] for c in CLASIFICADOR_FEATURES]], dtype=np.float32)
+    label_out, proba_out = clasificador_sess.run(None, {CLASIFICADOR_INPUT_NAME: x})
+
+    probs = proba_out[0]
+    probabilidades = sorted(
+        [{"posicion": c, "probabilidad": round(float(p), 4)} for c, p in zip(POSICIONES, probs)],
+        key=lambda item: item["probabilidad"],
+        reverse=True,
+    )
+    return {
+        "posicion_predicha": str(label_out[0]),
+        "probabilidades": probabilidades,
+    }
