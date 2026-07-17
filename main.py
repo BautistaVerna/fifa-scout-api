@@ -18,6 +18,7 @@ import onnxruntime as ort
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 
 # ============================================================
@@ -87,6 +88,7 @@ CLASIFICADOR_RANGE_FEATURES = [
     "height_cm", "weight_kgs", "potential", "value_euro", "wage_euro", "release_clause_euro",
 ] + CLASIFICADOR_SKILLS
 TIPOS_CUERPO = ["Atipico", "Lean", "Normal", "Stocky"]
+SCATTER_MAX = 3000  # tope de puntos del scatter para no tirar ~17.7k filas al frontend
 
 COMPARATIVA_CLASIFICADOR = [
     {"modelo": "Naive Bayes (Gaussian)", "acc_test": 0.6912, "f1_macro_test": 0.6883, "f1_weighted_test": 0.6939, "auc_macro_ovr": 0.9455},
@@ -147,6 +149,7 @@ CLASIFICADOR_INPUT_NAME = clasificador_sess.get_inputs()[0].name
 
 app = FastAPI(title="FIFA Scout API", version="1.0.0")
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # restringir al dominio de Lovable en producción
@@ -189,17 +192,63 @@ def calcular_joyas(data: pd.DataFrame, edad_tope: int, percentil: float, potenci
     ]
 
 
-def jugador_a_dict(row) -> dict:
-    return {
-        "id": int(row.name),
-        "nombre": row[SHORT_COL],
-        "nacionalidad": row["nationality"],
-        "edad": int(row["age"]),
-        "overall": int(row["overall_rating"]),
-        "potencial_predicho": float(row["potential_predicho"]),
-        "valor_euros": float(row["value_euro"]),
-        "posicion": row[POSITION_COL] if POSITION_COL else None,
-    }
+def jugadores_a_lista(data: pd.DataFrame) -> list:
+    """Misma forma que antes (un dict por fila), pero construido con arrays
+    en vez de DataFrame.iterrows(), que es notoriamente lento fila a fila."""
+    if data.empty:
+        return []
+    posiciones = data[POSITION_COL].to_numpy() if POSITION_COL else [None] * len(data)
+    return [
+        {
+            "id": int(i),
+            "nombre": nombre,
+            "nacionalidad": nacionalidad,
+            "edad": int(edad),
+            "overall": int(overall),
+            "potencial_predicho": float(potencial),
+            "valor_euros": float(valor),
+            "posicion": posicion,
+        }
+        for i, nombre, nacionalidad, edad, overall, potencial, valor, posicion in zip(
+            data.index.to_numpy(),
+            data[SHORT_COL].to_numpy(),
+            data["nationality"].to_numpy(),
+            data["age"].to_numpy(),
+            data["overall_rating"].to_numpy(),
+            data["potential_predicho"].to_numpy(),
+            data["value_euro"].to_numpy(),
+            posiciones,
+        )
+    ]
+
+
+def scatter_de(data: pd.DataFrame, max_puntos: int = SCATTER_MAX) -> list:
+    """Puntos para el scatter Valor vs Potencial. Si el filtro trae más de
+    max_puntos filas, se muestrea al azar: el frontend igual las dibuja como
+    puntos individuales sin virtualización, así que mandar 17k+ reventaba
+    tanto la red como el render."""
+    if data.empty:
+        return []
+    muestra = data if len(data) <= max_puntos else data.sample(n=max_puntos)
+    valores_millones = (muestra["value_euro"].to_numpy() / 1_000_000).round(2)
+    return [
+        {
+            "id": int(i),
+            "valor_millones": float(valor),
+            "potencial_predicho": float(potencial),
+            "edad": int(edad),
+            "overall": int(overall),
+            "nombre": nombre,
+        }
+        for i, valor, potencial, edad, overall, nombre in zip(
+            muestra.index.to_numpy(),
+            valores_millones,
+            muestra["potential_predicho"].to_numpy(),
+            muestra["age"].to_numpy(),
+            muestra["overall_rating"].to_numpy(),
+            muestra[SHORT_COL].to_numpy(),
+        )
+    ]
 
 
 # ============================================================
@@ -248,18 +297,8 @@ def listar_jugadores(
     muestra = filtrado.sort_values("potential_predicho", ascending=False).head(limit)
     return {
         "kpis": kpis,
-        "jugadores": [jugador_a_dict(r) for _, r in muestra.iterrows()],
-        "scatter": [
-            {
-                "id": int(r.name),
-                "valor_millones": round(float(r["value_euro"]) / 1_000_000, 2),
-                "potencial_predicho": float(r["potential_predicho"]),
-                "edad": int(r["age"]),
-                "overall": int(r["overall_rating"]),
-                "nombre": r[SHORT_COL],
-            }
-            for _, r in filtrado.iterrows()
-        ],
+        "jugadores": jugadores_a_lista(muestra),
+        "scatter": scatter_de(filtrado),
     }
 
 
@@ -296,8 +335,8 @@ def joyas_ocultas(
 
     return {
         "criterios_relajados": criterios_relajados,
-        "jugadores": [jugador_a_dict(r) for _, r in joyas.iterrows()],
-        "mayor_potencial": [jugador_a_dict(r) for _, r in mayor_potencial.iterrows()],
+        "jugadores": jugadores_a_lista(joyas),
+        "mayor_potencial": jugadores_a_lista(mayor_potencial),
     }
 
 
